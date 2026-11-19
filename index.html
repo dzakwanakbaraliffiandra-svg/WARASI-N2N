@@ -401,9 +401,39 @@ b { color: var(--ink); }
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
   .reveal { opacity: 1; transform: none; }
 }
+
+/* ===================== Admin ===================== */
+.btn-danger { background: #fff; color: var(--merah-deep); border-color: rgba(185,28,28,.35); padding: 8px 14px; font-size: .84rem; }
+.btn-danger:hover { background: var(--merah); color: #fff; border-color: var(--merah); }
+.card-actions { display: flex; gap: 8px; align-items: center; }
+.admin-bar {
+  display: none; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap;
+  padding: 8px 14px; font-size: .84rem; font-weight: 700; color: #fff;
+  background: linear-gradient(120deg, var(--merah-deep), var(--oren-deep));
+}
+body.is-admin .admin-bar { display: flex; }
+.admin-bar button {
+  font: inherit; font-weight: 700; font-size: .8rem; cursor: pointer;
+  padding: 4px 12px; border-radius: 999px; border: 1px solid rgba(255,255,255,.7); background: transparent; color: #fff;
+}
+.admin-bar button:hover { background: #fff; color: var(--merah-deep); }
+#adminForm { display: grid; gap: 14px; }
+#adminForm label { display: grid; gap: 6px; font-size: .86rem; font-weight: 700; color: var(--ink); }
+#adminForm input {
+  font: inherit; font-weight: 500; padding: 11px 14px; border-radius: 12px;
+  border: 1px solid var(--line); background: #fff8f3; color: var(--ink);
+  transition: border-color .2s, box-shadow .2s;
+}
+#adminForm input:focus { outline: none; border-color: var(--oren); box-shadow: 0 0 0 4px rgba(255,122,24,.16); background: #fff; }
   </style>
 </head>
 <body>
+  <!-- ===== Bilah mode admin (hanya tampil setelah login admin) ===== -->
+  <div class="admin-bar" id="adminBar">
+    <span>🔐 Mode Admin aktif — kamu bisa menghapus aspirasi</span>
+    <button type="button" id="adminKeluar">Keluar</button>
+  </div>
+
   <!-- ===== Dekorasi latar bergradasi ===== -->
   <div class="bg-layer" aria-hidden="true">
     <span class="orb orb--merah"></span>
@@ -623,6 +653,7 @@ b { color: var(--ink); }
           <a href="#tentang">Tentang OSIS</a>
           <a href="#">Panduan</a>
           <a href="#">Kontak OSIS</a>
+          <a href="#" id="adminLink">Masuk Admin</a>
         </div>
       </div>
     </div>
@@ -669,6 +700,24 @@ b { color: var(--ink); }
     </div>
   </div>
 
+  <!-- ===== Modal Login Admin ===== -->
+  <div class="modal" id="adminModal" aria-hidden="true">
+    <div class="modal-backdrop" data-close-admin></div>
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="adminTitle">
+      <button class="modal-close" type="button" data-close-admin aria-label="Tutup">✕</button>
+      <h3 id="adminTitle">Masuk Admin OSIS</h3>
+      <p class="modal-sub">Khusus pengurus OSIS untuk menghapus aspirasi.</p>
+      <form id="adminForm">
+        <label>
+          Password admin
+          <input type="password" name="token" required autocomplete="current-password" placeholder="Masukkan password admin" />
+        </label>
+        <button class="btn btn-primary btn-block" type="submit">Masuk</button>
+      </form>
+      <p class="modal-note" id="adminNote"></p>
+    </div>
+  </div>
+
   <!-- ===== Toast ===== -->
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
@@ -691,12 +740,25 @@ function esc(teks) {
   ));
 }
 
-/* Pembungkus fetch ke API server.py */
+/* ---------- Admin: password disimpan di sessionStorage (hilang saat tab ditutup) ---------- */
+const KUNCI_ADMIN = "aspirasi_admin_token";
+let adminToken = "";
+try { adminToken = sessionStorage.getItem(KUNCI_ADMIN) || ""; } catch (_) {}
+
+function setAdmin(token) {
+  adminToken = token || "";
+  try {
+    if (adminToken) sessionStorage.setItem(KUNCI_ADMIN, adminToken);
+    else sessionStorage.removeItem(KUNCI_ADMIN);
+  } catch (_) {}
+  document.body.classList.toggle("is-admin", !!adminToken);
+}
+
+/* Pembungkus fetch ke API (header admin ikut terkirim bila sudah login) */
 async function api(path, opsi = {}) {
-  const res = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
-    ...opsi
-  });
+  const headers = { "Content-Type": "application/json", ...(opsi.headers || {}) };
+  if (adminToken) headers["X-Admin-Token"] = adminToken;
+  const res = await fetch(path, { ...opsi, headers });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Terjadi kesalahan pada server");
   return data;
@@ -779,9 +841,33 @@ function buatKartu(item) {
         <span class="metric metric--dukung dukung-metric">👏 <b class="dukungan-num">${nf.format(item.dukungan)}</b></span>
         <span class="metric">💬 <b class="komentar-num">${item.komentar}</b></span>
       </div>
-      <button class="btn btn-primary btn-dukung" type="button">Dukung →</button>
+      <div class="card-actions">
+        ${adminToken ? `<button class="btn btn-danger btn-hapus" type="button">🗑️ Hapus</button>` : ""}
+        <button class="btn btn-primary btn-dukung" type="button">Dukung →</button>
+      </div>
     </div>
   `;
+
+  /* Tombol hapus (hanya ada untuk admin; server tetap memeriksa password) */
+  const tombolHapus = card.querySelector(".btn-hapus");
+  if (tombolHapus) {
+    tombolHapus.addEventListener("click", async () => {
+      if (!confirm(`Hapus aspirasi "${item.judul}"?\nTindakan ini tidak bisa dibatalkan.`)) return;
+      tombolHapus.disabled = true;
+      try {
+        await api(`/api/aspirasi/${encodeURIComponent(item.id)}`, { method: "DELETE" });
+        tampilkanToast("Aspirasi sudah dihapus 🗑️");
+        await muatAspirasi(filterAktif);
+      } catch (err) {
+        if (/password admin/i.test(err.message)) {
+          setAdmin("");
+          renderAspirasi(filterAktif);
+        }
+        tampilkanToast("Gagal menghapus: " + err.message);
+        tombolHapus.disabled = false;
+      }
+    });
+  }
 
   /* Tombol dukung */
   const tombolDukung = card.querySelector(".btn-dukung");
@@ -930,6 +1016,62 @@ form.addEventListener("submit", async (e) => {
   }
 });
 
+/* ---------- Modal login admin ---------- */
+const adminModal = document.getElementById("adminModal");
+const adminForm = document.getElementById("adminForm");
+const adminNote = document.getElementById("adminNote");
+
+function bukaAdmin() {
+  adminModal.classList.add("is-open");
+  adminModal.setAttribute("aria-hidden", "false");
+  document.body.style.overflow = "hidden";
+  setTimeout(() => adminForm.querySelector("input").focus(), 60);
+}
+function tutupAdmin() {
+  adminModal.classList.remove("is-open");
+  adminModal.setAttribute("aria-hidden", "true");
+  document.body.style.overflow = "";
+  adminNote.textContent = "";
+  adminForm.reset();
+}
+
+document.getElementById("adminLink").addEventListener("click", (e) => {
+  e.preventDefault();
+  if (adminToken) { tampilkanToast("Kamu sudah masuk sebagai admin"); return; }
+  bukaAdmin();
+});
+document.querySelectorAll("[data-close-admin]").forEach((el) => el.addEventListener("click", tutupAdmin));
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && adminModal.classList.contains("is-open")) tutupAdmin();
+});
+
+adminForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const token = new FormData(adminForm).get("token");
+  const tombol = adminForm.querySelector('button[type="submit"]');
+  tombol.disabled = true;
+  adminNote.textContent = "Memeriksa…";
+  try {
+    const res = await fetch("/api/admin", { method: "POST", headers: { "X-Admin-Token": token } });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Gagal masuk");
+    setAdmin(token);
+    tutupAdmin();
+    renderAspirasi(filterAktif);
+    tampilkanToast("Masuk sebagai admin ✅");
+  } catch (err) {
+    adminNote.textContent = err.message;
+  } finally {
+    tombol.disabled = false;
+  }
+});
+
+document.getElementById("adminKeluar").addEventListener("click", () => {
+  setAdmin("");
+  renderAspirasi(filterAktif);
+  tampilkanToast("Kamu sudah keluar dari mode admin");
+});
+
 /* ---------- Toast ---------- */
 let toastTimer;
 const toastEl = document.getElementById("toast");
@@ -1027,6 +1169,7 @@ function isiKartuHero() {
 }
 
 document.getElementById("year").textContent = new Date().getFullYear();
+document.body.classList.toggle("is-admin", !!adminToken);
 muatAspirasi("all");
 amatiReveal();
   </script>
